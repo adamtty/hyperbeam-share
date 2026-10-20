@@ -17,8 +17,12 @@ tunnel and deletes the temp files (so does quitting the app).
 
 Download the latest `Hyperbeam-Share-…-macos-arm64.zip` from
 [Releases](https://github.com/adamtty/hyperbeam-share/releases/latest) (Apple Silicon, macOS 11+),
-unzip it and move **Hyperbeam Share** to Applications. Each release's notes say whether that build is
-notarised; if it isn't, open it the first time with right-click → **Open**.
+unzip it and move **Hyperbeam Share** to Applications.
+
+Releases aren't signed with an Apple Developer ID yet, so macOS blocks the app the first time you open
+it. Try to open it once, then go to **System Settings → Privacy & Security**, scroll down and click
+**Open Anyway**. (Or run `xattr -dr com.apple.quarantine "/Applications/Hyperbeam Share.app"`.) The
+checks below confirm it's the build this repository published.
 
 To check a download: `shasum -a 256 -c SHA256SUMS` in the folder with the release files, and
 `gh attestation verify Hyperbeam-Share-…-macos-arm64.zip --repo adamtty/hyperbeam-share`, which proves

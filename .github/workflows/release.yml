@@ -94,7 +94,7 @@ jobs:
             echo "Developer ID signing and notarisation"
           else
             echo "SIGNED=0" >> "$GITHUB_ENV"
-            echo "::warning::No Apple signing secrets: the app will be ad-hoc signed and Gatekeeper will block it until opened with right-click → Open."
+            echo "::warning::No Apple signing secrets: the app is ad-hoc signed, so Gatekeeper blocks it until the user clicks Open Anyway."
           fi
 
       - name: Build
@@ -182,7 +182,7 @@ jobs:
           if [ "$(cat .signed)" = 1 ]; then
             opening="Signed with a Developer ID and notarised by Apple: unzip it, move it to Applications and open it."
           else
-            opening="This build is **not notarised**, so macOS will refuse to open it at first. Unzip it, move it to Applications, then right-click it → **Open** → **Open** (once), or run \`xattr -dr com.apple.quarantine \"/Applications/Hyperbeam Share.app\"\`."
+            opening="This build isn't signed with an Apple Developer ID, so macOS blocks it the first time. Unzip it, move it to Applications and try to open it; then go to **System Settings → Privacy & Security**, scroll down and click **Open Anyway** (once). Or, in Terminal: \`xattr -dr com.apple.quarantine \"/Applications/Hyperbeam Share.app\"\`."
           fi
           cat > notes.md <<EOF
           **Download:** \`$zip\` (Apple Silicon, macOS 11+). $opening
