@@ -273,6 +273,12 @@ async fn start_tunnel(app: &AppHandle, port: u16) -> Result<(String, CommandChil
     Ok((url, child))
 }
 
+/// Serves one share's directory and nothing else. ServeDir handles Range requests (which <video>
+/// seeking relies on), rejects `..` paths and never lists directories; the tests check all three.
+fn share_router(dir: &Path) -> axum::Router {
+    axum::Router::new().fallback_service(ServeDir::new(dir))
+}
+
 /// A new temp directory for one share: an unguessable name, owner-only, and creation fails if the path
 /// already exists, so on a shared /tmp another user can't pre-create it (or a symlink) to see or swap
 /// what gets served.
@@ -327,8 +333,7 @@ async fn prepare_and_share(
         .await
         .map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-    // ServeDir handles Range requests, which <video> seeking relies on.
-    let router = axum::Router::new().fallback_service(ServeDir::new(&dir));
+    let router = share_router(&dir);
     let server = tauri::async_runtime::spawn(async move {
         let _ = axum::serve(listener, router).await;
     });
@@ -413,6 +418,80 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// A raw HTTP/1.1 GET, so the test needs no HTTP client: (status, headers, body)
+    async fn get(port: u16, path: &str, extra: &str) -> (u16, String, Vec<u8>) {
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        let req =
+            format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{extra}Connection: close\r\n\r\n");
+        s.write_all(req.as_bytes()).await.unwrap();
+        let mut raw = Vec::new();
+        s.read_to_end(&mut raw).await.unwrap();
+        let split = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+        let head = String::from_utf8_lossy(&raw[..split]).to_string();
+        let status = head.split(' ').nth(1).unwrap().parse().unwrap();
+        (status, head, raw[split + 4..].to_vec())
+    }
+
+    #[tokio::test]
+    async fn share_server_serves_only_the_share() {
+        // <tmp>/hb-test-<pid>/{secret.txt, share/{video.mp4, index.html, sub/x.txt}}
+        let root = std::env::temp_dir().join(format!("hb-test-{}", std::process::id()));
+        let share = root.join("share");
+        std::fs::create_dir_all(share.join("sub")).unwrap();
+        let video: Vec<u8> = (0..=255u8).collect();
+        std::fs::write(share.join("video.mp4"), &video).unwrap();
+        std::fs::write(share.join("index.html"), "player").unwrap();
+        std::fs::write(share.join("sub/x.txt"), "x").unwrap();
+        std::fs::write(root.join("secret.txt"), "SECRET").unwrap();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let router = share_router(&share);
+        let server = tokio::spawn(async move { axum::serve(listener, router).await });
+
+        let (status, _, body) = get(port, "/video.mp4", "").await;
+        assert_eq!((status, body), (200, video.clone()));
+
+        // seeking: a byte range comes back as 206 with exactly those bytes
+        let (status, head, body) = get(port, "/video.mp4", "Range: bytes=10-19\r\n").await;
+        assert_eq!(status, 206);
+        assert!(
+            head.to_lowercase()
+                .contains("content-range: bytes 10-19/256"),
+            "{head}"
+        );
+        assert_eq!(body, video[10..20]);
+
+        // nothing outside the share, however the path is spelled
+        for path in [
+            "/../secret.txt",
+            "/%2e%2e/secret.txt",
+            "/%2E%2E%2Fsecret.txt",
+            "/..%2fsecret.txt",
+            "/sub/../../secret.txt",
+            "/sub/%2e%2e/%2e%2e/secret.txt",
+            "//../secret.txt",
+        ] {
+            let (status, _, body) = get(port, path, "").await;
+            assert_ne!(status, 200, "{path} was served");
+            assert!(
+                !String::from_utf8_lossy(&body).contains("SECRET"),
+                "{path} leaked the file"
+            );
+        }
+
+        // a directory without index.html is a 404, never a listing
+        let (status, _, body) = get(port, "/sub/", "").await;
+        assert_eq!(status, 404);
+        assert!(!String::from_utf8_lossy(&body).contains("x.txt"));
+
+        server.abort();
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn share_dirs_are_new_private_and_never_reused() {
