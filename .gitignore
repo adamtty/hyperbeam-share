@@ -1,0 +1,5 @@
+/src-tauri/target/
+/src-tauri/gen/schemas/
+# Sidecars are large; see README for how to populate them.
+/src-tauri/binaries/
+.DS_Store

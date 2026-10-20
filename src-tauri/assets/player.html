@@ -1,0 +1,118 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hyperbeam Share</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+    #stage { position: relative; width: 100vw; height: 100vh; }
+    video { width: 100%; height: 100%; background: #000; display: block; }
+    #diag {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+      background: rgba(0,0,0,.86); color: #ddd; font: 12px ui-monospace, monospace;
+      padding: 10px 12px; white-space: pre-wrap; display: none; border-top: 1px solid #333;
+    }
+    #diagBtn {
+      position: fixed; right: 10px; top: 10px; z-index: 21;
+      background: rgba(0,0,0,.6); color: #aaa; border: 1px solid #444;
+      border-radius: 6px; padding: 4px 9px; font: 11px sans-serif; cursor: pointer;
+    }
+    #unmute {
+      position: fixed; left: 50%; top: 50%; transform: translate(-50%,-50%); z-index: 22;
+      background: #2563eb; color: #fff; border: none; border-radius: 8px;
+      padding: 14px 22px; font: 15px sans-serif; cursor: pointer; display: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="stage">
+    <video id="v" src="video.mp4" controls playsinline preload="metadata"></video>
+  </div>
+
+  <button id="diagBtn">diagnostics</button>
+  <button id="unmute">🔇 Tap to enable sound</button>
+  <div id="diag"></div>
+
+  <script type="module">
+    const SUB_KIND = "__SUB_KIND__"; // "none" | "vtt" | "ass"
+    const v = document.getElementById("v");
+
+    // ---- subtitles -------------------------------------------------------
+    // Text-based subs go through a native <track>, which needs no JS, no wasm
+    // and no third-party origin — by far the most reliable path. Only real
+    // ASS/SSA (styling, positioning, karaoke) needs the libass renderer, and
+    // that is served from this same origin: a Worker script must be
+    // same-origin, so the old CDN URLs could never have worked.
+    if (SUB_KIND === "vtt") {
+      const t = document.createElement("track");
+      t.kind = "subtitles";
+      t.label = "English";
+      t.srclang = "en";
+      t.src = "subs.vtt";
+      t.default = true;
+      v.appendChild(t);
+      v.addEventListener("loadedmetadata", () => {
+        if (v.textTracks[0]) v.textTracks[0].mode = "showing";
+      });
+    } else if (SUB_KIND === "ass") {
+      const { default: JASSUB } = await import("./jassub.js");
+      new JASSUB({
+        video: v,
+        subUrl: "subs.ass",
+        workerUrl: "./jassub-worker.js",
+        wasmUrl: "./jassub-worker.wasm",
+        modernWasmUrl: "./jassub-worker-modern.wasm",
+        availableFonts: { "default": "./default.woff2" },
+        defaultFont: "default",
+      });
+    }
+
+    // ---- audio -----------------------------------------------------------
+    // Autoplay-with-sound is blocked by every browser without a user gesture,
+    // and a blocked play() is indistinguishable from "the video is silent".
+    // So: never autoplay unmuted, and if playback does start muted, say so
+    // loudly instead of letting it look like broken audio.
+    const unmute = document.getElementById("unmute");
+    unmute.addEventListener("click", () => {
+      v.muted = false;
+      v.volume = 1;
+      unmute.style.display = "none";
+      v.play().catch(() => {});
+    });
+    const checkMuted = () => {
+      unmute.style.display = (v.muted || v.volume === 0) ? "block" : "none";
+    };
+    v.addEventListener("play", checkMuted);
+    v.addEventListener("volumechange", checkMuted);
+
+    // ---- diagnostics -----------------------------------------------------
+    const diag = document.getElementById("diag");
+    document.getElementById("diagBtn").addEventListener("click", async () => {
+      if (diag.style.display === "block") { diag.style.display = "none"; return; }
+      const lines = [];
+      lines.push(`userAgent      ${navigator.userAgent}`);
+      lines.push(`readyState     ${v.readyState}   networkState ${v.networkState}`);
+      lines.push(`duration       ${v.duration}`);
+      lines.push(`muted          ${v.muted}    volume ${v.volume}    paused ${v.paused}`);
+      lines.push(`error          ${v.error ? v.error.code + " " + v.error.message : "none"}`);
+      lines.push(`canPlay mp4    "${v.canPlayType('video/mp4')}"`);
+      lines.push(`canPlay h264   "${v.canPlayType('video/mp4; codecs="avc1.640028"')}"`);
+      lines.push(`canPlay aac    "${v.canPlayType('audio/mp4; codecs="mp4a.40.2"')}"`);
+      lines.push(`audioTracks    ${v.audioTracks ? v.audioTracks.length : "API unavailable"}`);
+      lines.push(`textTracks     ${v.textTracks.length}` +
+        (v.textTracks[0] ? ` mode=${v.textTracks[0].mode} cues=${v.textTracks[0].cues ? v.textTracks[0].cues.length : "null"}` : ""));
+      lines.push(`subKind        ${SUB_KIND}`);
+      for (const f of ["video.mp4", SUB_KIND === "vtt" ? "subs.vtt" : "subs.ass"]) {
+        if (SUB_KIND === "none" && f !== "video.mp4") continue;
+        try {
+          const r = await fetch(f, { method: "HEAD" });
+          lines.push(`HEAD ${f}  ${r.status} ${r.headers.get("content-type")} ${r.headers.get("content-length")}`);
+        } catch (e) { lines.push(`HEAD ${f}  FAILED ${e}`); }
+      }
+      diag.textContent = lines.join("\n");
+      diag.style.display = "block";
+    });
+  </script>
+</body>
+</html>
