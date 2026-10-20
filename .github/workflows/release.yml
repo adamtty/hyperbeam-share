@@ -185,6 +185,7 @@ jobs:
           path: dist
 
       - name: Build provenance
+        id: provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/*.zip
@@ -193,9 +194,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          PROVENANCE: ${{ steps.provenance.outputs.bundle-path }}
         run: |
           cd dist
           zip=$(ls -- *.zip)
+          # the signed SLSA provenance, attached so it can be checked offline (and so tools find it)
+          cp "$PROVENANCE" "$zip.intoto.jsonl"
           if [ "$(cat .signed)" = 1 ]; then
             opening="Signed with a Developer ID and notarised by Apple: unzip it, move it to Applications and open it."
           else
@@ -209,4 +213,4 @@ jobs:
           Bundles ffmpeg/ffprobe built from FFmpeg's signed source (LGPL-2.1-or-later; the exact source tarball is attached) and Cloudflare's own \`cloudflared\` $CLOUDFLARED_VERSION. See \`THIRD_PARTY_NOTICES.md\`.
           EOF
           gh release create "$GITHUB_REF_NAME" --repo "$REPO" --verify-tag --title "Hyperbeam Share ${GITHUB_REF_NAME}" \
-            --notes-file notes.md --generate-notes -- *.zip SHA256SUMS ffmpeg-*.tar.xz ffmpeg-*.tar.xz.asc THIRD_PARTY_NOTICES.md
+            --notes-file notes.md --generate-notes -- *.zip *.zip.intoto.jsonl SHA256SUMS ffmpeg-*.tar.xz ffmpeg-*.tar.xz.asc THIRD_PARTY_NOTICES.md
