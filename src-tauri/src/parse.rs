@@ -25,7 +25,12 @@ pub fn subtitle_tracks(json: &str) -> Result<Vec<SubtitleTrack>, String> {
         .filter_map(|s| {
             Some(SubtitleTrack {
                 index: u32::try_from(s["index"].as_u64()?).ok()?,
-                codec: s["codec_name"].as_str().unwrap_or("unknown").to_string(),
+                // missing and empty both mean unknown (an empty name was found by fuzzing)
+                codec: s["codec_name"]
+                    .as_str()
+                    .filter(|c| !c.is_empty())
+                    .unwrap_or("unknown")
+                    .to_string(),
                 language: s["tags"]["language"].as_str().map(str::to_string),
                 title: s["tags"]["title"].as_str().map(str::to_string),
             })
@@ -84,6 +89,9 @@ mod tests {
         let tracks = subtitle_tracks(json).unwrap();
         assert_eq!(tracks.iter().map(|t| t.index).collect::<Vec<_>>(), vec![7]);
         assert!(subtitle_tracks("not json").is_err());
+        // found by cargo-fuzz: an empty codec name
+        let empty = subtitle_tracks(r#"{"streams":[{"index":3,"codec_name":""}]}"#).unwrap();
+        assert_eq!(empty[0].codec, "unknown");
         assert!(subtitle_tracks("[]").unwrap().is_empty());
     }
 
