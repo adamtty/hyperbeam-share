@@ -6,13 +6,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use regex::Regex;
 use serde::Serialize;
 use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Manager, RunEvent, State};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 use tower_http::services::ServeDir;
+
+mod parse;
+use parse::SubtitleTrack;
 
 const PLAYER_HTML: &str = include_str!("../assets/player.html");
 
@@ -62,14 +64,6 @@ impl ActiveShare {
 struct ShareResult {
     url: String,
     warnings: Vec<String>,
-}
-
-#[derive(Serialize, Clone)]
-struct SubtitleTrack {
-    index: u32,
-    codec: String,
-    language: Option<String>,
-    title: Option<String>,
 }
 
 async fn ffprobe(app: &AppHandle, args: &[&str]) -> Result<String, String> {
@@ -150,17 +144,7 @@ async fn probe_subtitles(app: AppHandle, path: String) -> Result<Vec<SubtitleTra
         ],
     )
     .await?;
-    let parsed: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-    let streams = parsed["streams"].as_array().cloned().unwrap_or_default();
-    Ok(streams
-        .iter()
-        .map(|s| SubtitleTrack {
-            index: s["index"].as_u64().unwrap_or(0) as u32,
-            codec: s["codec_name"].as_str().unwrap_or("unknown").to_string(),
-            language: s["tags"]["language"].as_str().map(str::to_string),
-            title: s["tags"]["title"].as_str().map(str::to_string),
-        })
-        .collect())
+    parse::subtitle_tracks(&json)
 }
 
 fn write_jassub_assets(dir: &Path) -> Result<(), String> {
@@ -220,10 +204,7 @@ async fn extract_subtitles(
         .iter()
         .find(|t| t.index == sub_index)
         .ok_or(format!("Subtitle track #{sub_index} not found."))?;
-    let (kind, file) = match track.codec.as_str() {
-        "ass" | "ssa" => ("ass", "subs.ass"),
-        _ => ("vtt", "subs.vtt"),
-    };
+    let (kind, file) = parse::subtitle_output(&track.codec);
     let map = format!("0:{sub_index}");
     let out = dir.join(file).to_string_lossy().to_string();
     let codec = if kind == "ass" { "copy" } else { "webvtt" };
@@ -245,13 +226,12 @@ async fn start_tunnel(app: &AppHandle, port: u16) -> Result<(String, CommandChil
         .spawn()
         .map_err(|e| format!("couldn't start cloudflared: {e}"))?;
 
-    let url_re = Regex::new(r"https://[a-zA-Z0-9\-]+\.trycloudflare\.com").unwrap();
     let found = tokio::time::timeout(TUNNEL_TIMEOUT, async {
         while let Some(event) = rx.recv().await {
             match event {
                 CommandEvent::Stdout(line) | CommandEvent::Stderr(line) => {
-                    if let Some(m) = url_re.find(&String::from_utf8_lossy(&line)) {
-                        return Some(m.as_str().to_string());
+                    if let Some(url) = parse::tunnel_url(&String::from_utf8_lossy(&line)) {
+                        return Some(url);
                     }
                 }
                 CommandEvent::Terminated(_) => return None,
