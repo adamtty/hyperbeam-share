@@ -2,12 +2,18 @@ name: Release
 
 # Pushing a tag like v0.2.0 builds the app on macOS and publishes it as a GitHub release.
 # The tag must match the version in tauri.conf.json and Cargo.toml.
-# "Run workflow" does a dry run: the same build and packaging, ad-hoc signed, published nowhere.
+# "Run workflow", and pull requests that touch the release build, do a dry run: the same build and packaging, ad-hoc signed, published nowhere.
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+  # dry run on pull requests that change how releases are built, so they're caught before a tag
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "scripts/build-ffmpeg.sh"
+      - "src-tauri/tauri.conf.json"
 
 permissions: {}
 
@@ -128,7 +134,8 @@ jobs:
       - name: Package
         run: |
           mkdir dist
-          zip="dist/Hyperbeam-Share-${GITHUB_REF_NAME}-macos-arm64.zip"
+          # a tag on release; on a pull-request dry run the ref is "3/merge", so no slashes in the name
+          zip="dist/Hyperbeam-Share-${GITHUB_REF_NAME//\//-}-macos-arm64.zip"
           ditto -c -k --keepParent "src-tauri/target/release/bundle/macos/Hyperbeam Share.app" "$zip"
           cp "$RUNNER_TEMP"/ffmpeg/source/* dist/
           cp THIRD_PARTY_NOTICES.md dist/
