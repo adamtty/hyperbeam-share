@@ -20,6 +20,10 @@ env:
   ZIZMOR_VERSION: 1.31.1
   # renovate: datasource=pypi depName=shellcheck-py
   SHELLCHECK_VERSION: 0.11.0.1
+  # cargo-fuzz needs nightly; pinned to a dated build so fuzz runs are reproducible
+  RUST_NIGHTLY: nightly-2026-10-15
+  # renovate: datasource=crate depName=cargo-fuzz
+  CARGO_FUZZ_VERSION: 0.13.2
 
 jobs:
   lint:
@@ -97,3 +101,51 @@ jobs:
       - name: Tests
         working-directory: src-tauri
         run: cargo test --locked
+
+  fuzz:
+    name: Fuzz
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            github.com:443
+            static.rust-lang.org:443
+            index.crates.io:443
+            static.crates.io:443
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Nightly Rust and cargo-fuzz
+        run: |
+          rustup toolchain install "$RUST_NIGHTLY" --profile minimal --component rustfmt,clippy
+          cargo +"$RUST_NIGHTLY" install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked
+
+      - name: rustfmt and clippy (fuzz targets)
+        working-directory: src-tauri/fuzz
+        run: |
+          cargo +"$RUST_NIGHTLY" fmt --check
+          cargo +"$RUST_NIGHTLY" clippy --locked --bins -- -D warnings
+
+      # coverage-guided (libFuzzer); -timeout makes any input slower than 10 s a failure
+      - name: Fuzz
+        working-directory: src-tauri
+        run: |
+          for t in ffprobe_json tunnel_url; do
+            mkdir -p "$RUNNER_TEMP/corpus/$t"
+            cp fuzz/corpus/"$t"/* "$RUNNER_TEMP/corpus/$t/"
+            cargo +"$RUST_NIGHTLY" fuzz run "$t" "$RUNNER_TEMP/corpus/$t" -- -max_total_time=60 -timeout=10
+          done
+
+      - name: Keep crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-crashes
+          path: src-tauri/fuzz/artifacts/
+          retention-days: 14

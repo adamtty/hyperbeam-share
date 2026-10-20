@@ -1,0 +1,14 @@
+# Advisories osv-scanner (and OpenSSF Scorecard) may skip for this lockfile, with the reason.
+# Both come only from Tauri's Linux backend (gtk / webkit2gtk, which pin glib 0.18 and its macros),
+# so they aren't in the macOS app this repository builds and releases:
+#   cargo tree -i glib --target aarch64-apple-darwin               → nothing
+#   cargo tree -i proc-macro-error --target aarch64-apple-darwin   → nothing
+# Revisit if a Linux build is ever added.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0429"
+reason = "glib 0.18 VariantStrIter unsoundness: glib is only a dependency of the Linux (GTK) backend, not of the macOS app; Tauri pins glib 0.18 there."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0370"
+reason = "proc-macro-error is unmaintained (no known vulnerability); it's only used by glib-macros/gtk3-macros in the Linux (GTK) backend, not by the macOS app."

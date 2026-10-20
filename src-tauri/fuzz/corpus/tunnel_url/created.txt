@@ -1,0 +1,3 @@
+2026-10-20T03:00:00Z INF +--------------------------------------------------------------------------------------------+
+2026-10-20T03:00:00Z INF |  Your quick Tunnel has been created! Visit it at (it may take some time to be reachable):  |
+2026-10-20T03:00:00Z INF |  https://wild-river-42.trycloudflare.com                                                   |
