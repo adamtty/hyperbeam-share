@@ -85,17 +85,14 @@ jobs:
           codesign -dv cloudflared 2>&1 | grep -qx "TeamIdentifier=$CLOUDFLARED_TEAM"
           cp cloudflared "$GITHUB_WORKSPACE/src-tauri/binaries/cloudflared-aarch64-apple-darwin"
 
-      # With the Apple secrets set, Tauri signs the app and sidecars with the Developer ID and
-      # notarises it; without them the app is ad-hoc signed.
+      # Signing happens in a second pass (below), so the Apple secrets are never in the environment
+      # while dependency code (build scripts, proc-macros) runs.
       - name: Signing mode
         env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          HAVE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE != '' }}
+          HAVE_API_KEY: ${{ secrets.APPLE_API_KEY_P8 != '' }}
         run: |
-          if [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_API_KEY_P8" ]; then
-            umask 077
-            printf '%s\n' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
-            echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+          if [ "$HAVE_CERTIFICATE" = true ] && [ "$HAVE_API_KEY" = true ]; then
             echo "SIGNED=1" >> "$GITHUB_ENV"
             echo "Developer ID signing and notarisation"
           else
@@ -103,22 +100,30 @@ jobs:
             echo "::warning::No Apple signing secrets: the app is ad-hoc signed, so Gatekeeper blocks it until the user clicks Open Anyway."
           fi
 
-      - name: Build
+      - name: Build (no secrets)
+        working-directory: src-tauri
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
+        run: cargo tauri build --bundles app -- --locked
+
+      # Everything is compiled already, so cargo has nothing to rebuild and no dependency code runs
+      # again: this pass only re-bundles, signs with the Developer ID and notarises.
+      - name: Sign and notarise
+        if: env.SIGNED == '1'
         working-directory: src-tauri
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          SECRET_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
         run: |
-          if [ "$SIGNED" = 1 ]; then
-            export APPLE_SIGNING_IDENTITY="$SECRET_SIGNING_IDENTITY"
-          else
-            # Tauri treats a set-but-empty APPLE_CERTIFICATE as a certificate to import, so remove them
-            unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_PATH
-            export APPLE_SIGNING_IDENTITY=-
-          fi
+          umask 077
+          export APPLE_API_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s\n' "$APPLE_API_KEY_P8" > "$APPLE_API_KEY_PATH"
+          unset APPLE_API_KEY_P8
+          trap 'rm -f "$APPLE_API_KEY_PATH"' EXIT
           cargo tauri build --bundles app -- --locked
 
       - name: Check the signature
@@ -129,7 +134,6 @@ jobs:
             spctl --assess --type execute --verbose=4 "$app"
             xcrun stapler validate "$app"
           fi
-          rm -f "$RUNNER_TEMP/AuthKey.p8"
 
       - name: Package
         run: |
