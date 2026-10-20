@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # renovate: datasource=github-releases depName=rust-lang/rust
+  RUST_VERSION: 1.99.1
+  # renovate: datasource=pypi depName=zizmor
+  ZIZMOR_VERSION: 1.31.1
+  # renovate: datasource=pypi depName=shellcheck-py
+  SHELLCHECK_VERSION: 0.11.0.1
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            github.com:443
+            pypi.org:443
+            files.pythonhosted.org:443
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: zizmor (workflow security)
+        run: pipx run "zizmor==${ZIZMOR_VERSION}" --offline --min-severity low .github/workflows
+
+      - name: shellcheck
+        run: pipx run --spec "shellcheck-py==${SHELLCHECK_VERSION}" shellcheck scripts/*.sh
+
+      - name: JavaScript parses
+        run: node --check src/main.js
+
+  rust:
+    name: Rust
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      # macOS runners only support audit mode: connections are logged, not blocked
+      - name: Harden runner
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component clippy,rustfmt
+          rustup default "$RUST_VERSION"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            src-tauri/target
+          key: rust-${{ env.RUST_VERSION }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      # tauri-build wants the sidecars to exist; tests never run them
+      - name: Placeholder sidecars
+        run: |
+          mkdir -p src-tauri/binaries
+          for b in ffmpeg ffprobe cloudflared; do
+            printf '#!/bin/sh\nexit 1\n' > "src-tauri/binaries/$b-aarch64-apple-darwin"
+            chmod +x "src-tauri/binaries/$b-aarch64-apple-darwin"
+          done
+
+      - name: rustfmt
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+      - name: clippy
+        working-directory: src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Tests
+        working-directory: src-tauri
+        run: cargo test --locked

@@ -1,0 +1,195 @@
+name: Release
+
+# Pushing a tag like v0.2.0 builds the app on macOS and publishes it as a GitHub release.
+# The tag must match the version in tauri.conf.json and Cargo.toml.
+# "Run workflow" does a dry run: the same build and packaging, ad-hoc signed, published nowhere.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # renovate: datasource=github-releases depName=rust-lang/rust
+  RUST_VERSION: 1.99.1
+  # renovate: datasource=crate depName=tauri-cli
+  TAURI_CLI_VERSION: 2.12.3
+  # cloudflared is bundled as Cloudflare ships it: version, archive hash and signing team all pinned.
+  # Bump the version and hash together (the hash is on the release page).
+  CLOUDFLARED_VERSION: 2026.10.1
+  CLOUDFLARED_SHA256: 647615df99d49cd179ea5e13ef760b9bbfb33630f6ae62f87e33dfadda60adcc
+  CLOUDFLARED_TEAM: 68WVV388M8
+
+jobs:
+  build:
+    name: Build app
+    runs-on: macos-latest
+    timeout-minutes: 60
+    # the Apple signing secrets live in "release", which only v* tags can use; dry runs get none
+    environment: ${{ github.event_name == 'push' && 'release' || 'release-dry-run' }}
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Tag matches the app version
+        if: github.event_name == 'push'
+        run: |
+          tag=${GITHUB_REF_NAME#v}
+          conf=$(python3 -c 'import json; print(json.load(open("src-tauri/tauri.conf.json"))["version"])')
+          crate=$(sed -n 's/^version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml | head -1)
+          if [ "$tag" != "$conf" ] || [ "$tag" != "$crate" ]; then
+            echo "::error::tag v$tag doesn't match tauri.conf.json ($conf) and Cargo.toml ($crate)"
+            exit 1
+          fi
+
+      - name: Rust toolchain and tauri-cli
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+          cargo install tauri-cli --version "$TAURI_CLI_VERSION" --locked
+
+      - name: ffmpeg and ffprobe (LGPL, built from FFmpeg's signed source)
+        run: |
+          scripts/build-ffmpeg.sh "$RUNNER_TEMP/ffmpeg"
+          mkdir -p src-tauri/binaries
+          cp "$RUNNER_TEMP/ffmpeg/ffmpeg" src-tauri/binaries/ffmpeg-aarch64-apple-darwin
+          cp "$RUNNER_TEMP/ffmpeg/ffprobe" src-tauri/binaries/ffprobe-aarch64-apple-darwin
+
+      - name: cloudflared (Cloudflare's release, hash and signature checked)
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "https://github.com/cloudflare/cloudflared/releases/download/$CLOUDFLARED_VERSION/cloudflared-darwin-arm64.tgz"
+          echo "$CLOUDFLARED_SHA256  cloudflared-darwin-arm64.tgz" | shasum -a 256 -c -
+          tar -xzf cloudflared-darwin-arm64.tgz
+          codesign --verify --strict cloudflared
+          codesign -dv cloudflared 2>&1 | grep -qx "TeamIdentifier=$CLOUDFLARED_TEAM"
+          cp cloudflared "$GITHUB_WORKSPACE/src-tauri/binaries/cloudflared-aarch64-apple-darwin"
+
+      # With the Apple secrets set, Tauri signs the app and sidecars with the Developer ID and
+      # notarises it; without them the app is ad-hoc signed.
+      - name: Signing mode
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_API_KEY_P8" ]; then
+            umask 077
+            printf '%s\n' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+            echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+            echo "SIGNED=1" >> "$GITHUB_ENV"
+            echo "Developer ID signing and notarisation"
+          else
+            echo "SIGNED=0" >> "$GITHUB_ENV"
+            echo "::warning::No Apple signing secrets: the app will be ad-hoc signed and Gatekeeper will block it until opened with right-click → Open."
+          fi
+
+      - name: Build
+        working-directory: src-tauri
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          SECRET_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          if [ "$SIGNED" = 1 ]; then export APPLE_SIGNING_IDENTITY="$SECRET_SIGNING_IDENTITY"; else export APPLE_SIGNING_IDENTITY=-; fi
+          cargo tauri build --bundles app -- --locked
+
+      - name: Check the signature
+        run: |
+          app="src-tauri/target/release/bundle/macos/Hyperbeam Share.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          if [ "$SIGNED" = 1 ]; then
+            spctl --assess --type execute --verbose=4 "$app"
+            xcrun stapler validate "$app"
+          fi
+          rm -f "$RUNNER_TEMP/AuthKey.p8"
+
+      - name: Package
+        run: |
+          mkdir dist
+          zip="dist/Hyperbeam-Share-${GITHUB_REF_NAME}-macos-arm64.zip"
+          ditto -c -k --keepParent "src-tauri/target/release/bundle/macos/Hyperbeam Share.app" "$zip"
+          cp "$RUNNER_TEMP"/ffmpeg/source/* dist/
+          cp THIRD_PARTY_NOTICES.md dist/
+          (cd dist && shasum -a 256 -- * > SHA256SUMS)
+          cat dist/SHA256SUMS
+          echo "$SIGNED" > dist/.signed
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: dist/
+          include-hidden-files: true
+          retention-days: 7
+
+  publish:
+    name: Publish release
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # create the release
+      id-token: write # sign the build-provenance attestation
+      attestations: write # store it
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
+            uploads.github.com:443
+            fulcio.sigstore.dev:443
+            rekor.sigstore.dev:443
+            tuf-repo-cdn.sigstore.dev:443
+            results-receiver.actions.githubusercontent.com:443
+            productionresultssa0.blob.core.windows.net:443
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: dist
+
+      - name: Build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.zip
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          cd dist
+          zip=$(ls -- *.zip)
+          if [ "$(cat .signed)" = 1 ]; then
+            opening="Signed with a Developer ID and notarised by Apple: unzip it, move it to Applications and open it."
+          else
+            opening="This build is **not notarised**, so macOS will refuse to open it at first. Unzip it, move it to Applications, then right-click it → **Open** → **Open** (once), or run \`xattr -dr com.apple.quarantine \"/Applications/Hyperbeam Share.app\"\`."
+          fi
+          cat > notes.md <<EOF
+          **Download:** \`$zip\` (Apple Silicon, macOS 11+). $opening
+
+          **Verify:** \`shasum -a 256 -c SHA256SUMS\`, and \`gh attestation verify $zip --repo $REPO\` to check it was built by this repository's release workflow.
+
+          Bundles ffmpeg/ffprobe built from FFmpeg's signed source (LGPL-2.1-or-later; the exact source tarball is attached) and Cloudflare's own \`cloudflared\` $CLOUDFLARED_VERSION. See \`THIRD_PARTY_NOTICES.md\`.
+          EOF
+          gh release create "$GITHUB_REF_NAME" --repo "$REPO" --verify-tag --title "Hyperbeam Share ${GITHUB_REF_NAME}" \
+            --notes-file notes.md --generate-notes -- *.zip SHA256SUMS ffmpeg-*.tar.xz ffmpeg-*.tar.xz.asc THIRD_PARTY_NOTICES.md

@@ -33,9 +33,17 @@ Names Arimo, Tinos, Cousine and Liberation. Licensed under the SIL Open Font Lic
 [`src-tauri/assets/jassub/default.woff2.OFL.txt`](src-tauri/assets/jassub/default.woff2.OFL.txt).
 "Liberation" is a trademark of Red Hat, Inc.
 
-## Not in this repository
+## Bundled in releases, not stored in this repository
 
-`ffmpeg`, `ffprobe` and `cloudflared` are downloaded separately into `src-tauri/binaries/` (git-ignored)
-and bundled into the built app. They have their own licenses: FFmpeg is LGPL-2.1-or-later or
-GPL-2.0-or-later depending on how it was built, and cloudflared is Apache-2.0. If you distribute a
-build, include their license notices too.
+`ffmpeg`, `ffprobe` and `cloudflared` live in `src-tauri/binaries/` (git-ignored) and are bundled into
+the built app:
+
+- **FFmpeg 9.0.1** (`ffmpeg`, `ffprobe`): built by the release workflow from FFmpeg's signed source
+  tarball with `scripts/build-ffmpeg.sh`, with no GPL or non-free parts and no third-party libraries,
+  so it's licensed **LGPL-2.1-or-later**. Every release attaches the exact source tarball it was built
+  from, and the build script shows how, so you can rebuild or modify it. https://ffmpeg.org
+- **cloudflared** (Cloudflare Tunnel client): Cloudflare's own signed release binary, **Apache-2.0**.
+  https://github.com/cloudflare/cloudflared
+
+If you build and distribute the app with different binaries (a GPL ffmpeg, for example), their license
+terms apply to what you distribute.

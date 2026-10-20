@@ -18,10 +18,22 @@ const PLAYER_HTML: &str = include_str!("../assets/player.html");
 
 const JASSUB_ASSETS: &[(&str, &[u8])] = &[
     ("jassub.js", include_bytes!("../assets/jassub/jassub.js")),
-    ("jassub-worker.js", include_bytes!("../assets/jassub/jassub-worker.js")),
-    ("jassub-worker.wasm", include_bytes!("../assets/jassub/jassub-worker.wasm")),
-    ("jassub-worker-modern.wasm", include_bytes!("../assets/jassub/jassub-worker-modern.wasm")),
-    ("default.woff2", include_bytes!("../assets/jassub/default.woff2")),
+    (
+        "jassub-worker.js",
+        include_bytes!("../assets/jassub/jassub-worker.js"),
+    ),
+    (
+        "jassub-worker.wasm",
+        include_bytes!("../assets/jassub/jassub-worker.wasm"),
+    ),
+    (
+        "jassub-worker-modern.wasm",
+        include_bytes!("../assets/jassub/jassub-worker-modern.wasm"),
+    ),
+    (
+        "default.woff2",
+        include_bytes!("../assets/jassub/default.woff2"),
+    ),
 ];
 
 /// Codecs Chromium (which Hyperbeam runs) can play from an MP4 without re-encoding.
@@ -94,22 +106,48 @@ async fn run_ffmpeg(app: &AppHandle, args: &[&str]) -> Result<(), String> {
 }
 
 /// First stream's codec_name for a selector like "a:0", or None if absent.
-async fn probe_codec(app: &AppHandle, path: &str, selector: &str) -> Result<Option<String>, String> {
+async fn probe_codec(
+    app: &AppHandle,
+    path: &str,
+    selector: &str,
+) -> Result<Option<String>, String> {
     let codec = ffprobe(
         app,
-        &["-v", "error", "-select_streams", selector, "-show_entries", "stream=codec_name",
-          "-of", "default=nw=1:nk=1", path],
+        &[
+            "-v",
+            "error",
+            "-select_streams",
+            selector,
+            "-show_entries",
+            "stream=codec_name",
+            "-of",
+            "default=nw=1:nk=1",
+            path,
+        ],
     )
     .await?;
-    Ok(codec.lines().next().map(str::to_string).filter(|c| !c.is_empty()))
+    Ok(codec
+        .lines()
+        .next()
+        .map(str::to_string)
+        .filter(|c| !c.is_empty()))
 }
 
 #[tauri::command]
 async fn probe_subtitles(app: AppHandle, path: String) -> Result<Vec<SubtitleTrack>, String> {
     let json = ffprobe(
         &app,
-        &["-v", "error", "-select_streams", "s", "-show_entries",
-          "stream=index,codec_name:stream_tags=language,title", "-of", "json", &path],
+        &[
+            "-v",
+            "error",
+            "-select_streams",
+            "s",
+            "-show_entries",
+            "stream=index,codec_name:stream_tags=language,title",
+            "-of",
+            "json",
+            &path,
+        ],
     )
     .await?;
     let parsed: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
@@ -132,7 +170,12 @@ fn write_jassub_assets(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-async fn remux_video(app: &AppHandle, path: &str, out: &Path, warnings: &mut Vec<String>) -> Result<(), String> {
+async fn remux_video(
+    app: &AppHandle,
+    path: &str,
+    out: &Path,
+    warnings: &mut Vec<String>,
+) -> Result<(), String> {
     let video = probe_codec(app, path, "v:0")
         .await?
         .ok_or("No video stream found in this file.")?;
@@ -153,12 +196,25 @@ async fn remux_video(app: &AppHandle, path: &str, out: &Path, warnings: &mut Vec
         Some("aac") => args.extend(["-map", "0:a:0", "-c:a", "copy"]),
         Some(_) => args.extend(["-map", "0:a:0", "-c:a", "aac", "-b:a", "192k", "-ac", "2"]),
     }
-    args.extend(["-sn", "-dn", "-map_chapters", "-1", "-movflags", "+faststart", out.as_str()]);
+    args.extend([
+        "-sn",
+        "-dn",
+        "-map_chapters",
+        "-1",
+        "-movflags",
+        "+faststart",
+        out.as_str(),
+    ]);
     run_ffmpeg(app, &args).await
 }
 
 /// Extracts the chosen subtitle track; returns the player's SUB_KIND.
-async fn extract_subtitles(app: &AppHandle, path: &str, sub_index: u32, dir: &Path) -> Result<&'static str, String> {
+async fn extract_subtitles(
+    app: &AppHandle,
+    path: &str,
+    sub_index: u32,
+    dir: &Path,
+) -> Result<&'static str, String> {
     let tracks = probe_subtitles(app.clone(), path.to_string()).await?;
     let track = tracks
         .iter()
@@ -180,7 +236,12 @@ async fn start_tunnel(app: &AppHandle, port: u16) -> Result<(String, CommandChil
         .shell()
         .sidecar("cloudflared")
         .map_err(|e| e.to_string())?
-        .args(["tunnel", "--no-autoupdate", "--url", &format!("http://127.0.0.1:{port}")])
+        .args([
+            "tunnel",
+            "--no-autoupdate",
+            "--url",
+            &format!("http://127.0.0.1:{port}"),
+        ])
         .spawn()
         .map_err(|e| format!("couldn't start cloudflared: {e}"))?;
 
@@ -220,7 +281,12 @@ fn fresh_share_dir() -> Result<PathBuf, String> {
     use std::hash::{BuildHasher, Hasher};
     for _ in 0..8 {
         let mut h = RandomState::new().build_hasher(); // randomly keyed per process
-        h.write_u128(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos());
+        h.write_u128(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        );
         h.write_u32(std::process::id());
         let dir = std::env::temp_dir().join(format!("hb-share-{:016x}", h.finish()));
         let mut builder = std::fs::DirBuilder::new();
@@ -276,12 +342,24 @@ async fn prepare_and_share(
         }
     };
 
-    *state.0.lock().unwrap() = Some(ActiveShare { dir, server, tunnel });
-    Ok(ShareResult { url: format!("{url}/"), warnings })
+    *state.0.lock().unwrap() = Some(ActiveShare {
+        dir,
+        server,
+        tunnel,
+    });
+    Ok(ShareResult {
+        url: format!("{url}/"),
+        warnings,
+    })
 }
 
 /// Fills `dir` with video.mp4, optional subs, index.html and any player assets.
-async fn prepare_dir(app: &AppHandle, path: &str, sub_index: Option<u32>, dir: &Path) -> Result<Vec<String>, String> {
+async fn prepare_dir(
+    app: &AppHandle,
+    path: &str,
+    sub_index: Option<u32>,
+    dir: &Path,
+) -> Result<Vec<String>, String> {
     let mut warnings = Vec::new();
     remux_video(app, path, &dir.join("video.mp4"), &mut warnings).await?;
 
@@ -315,7 +393,11 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .manage(ShareState::default())
-        .invoke_handler(tauri::generate_handler![probe_subtitles, prepare_and_share, stop_sharing])
+        .invoke_handler(tauri::generate_handler![
+            probe_subtitles,
+            prepare_and_share,
+            stop_sharing
+        ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
@@ -337,14 +419,25 @@ mod tests {
         let a = fresh_share_dir().unwrap();
         let b = fresh_share_dir().unwrap();
         assert_ne!(a, b);
-        assert!(a.file_name().unwrap().to_str().unwrap().starts_with("hb-share-"));
+        assert!(a
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("hb-share-"));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(&a).unwrap().permissions().mode() & 0o777, 0o700);
+            assert_eq!(
+                std::fs::metadata(&a).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
         }
         // the exclusive create that fresh_share_dir relies on refuses an existing path
-        assert_eq!(std::fs::DirBuilder::new().create(&a).unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            std::fs::DirBuilder::new().create(&a).unwrap_err().kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
         std::fs::remove_dir(&a).unwrap();
         std::fs::remove_dir(&b).unwrap();
     }
