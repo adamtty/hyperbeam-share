@@ -11,7 +11,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
-axum = "0.7"
+axum = "0.8"
 tower-http = { version = "0.5", features = ["fs"] }
 tokio = { version = "1", features = ["net", "time"] }
 serde = { version = "1", features = ["derive"] }
