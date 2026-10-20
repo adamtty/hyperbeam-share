@@ -212,6 +212,29 @@ async fn start_tunnel(app: &AppHandle, port: u16) -> Result<(String, CommandChil
     Ok((url, child))
 }
 
+/// A new temp directory for one share: an unguessable name, owner-only, and creation fails if the path
+/// already exists, so on a shared /tmp another user can't pre-create it (or a symlink) to see or swap
+/// what gets served.
+fn fresh_share_dir() -> Result<PathBuf, String> {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    for _ in 0..8 {
+        let mut h = RandomState::new().build_hasher(); // randomly keyed per process
+        h.write_u128(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos());
+        h.write_u32(std::process::id());
+        let dir = std::env::temp_dir().join(format!("hb-share-{:016x}", h.finish()));
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        match builder.create(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Err("couldn't create a temporary directory".into())
+}
+
 #[tauri::command]
 async fn prepare_and_share(
     app: AppHandle,
@@ -223,9 +246,7 @@ async fn prepare_and_share(
         old.shutdown();
     }
 
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
-    let dir = std::env::temp_dir().join(format!("hb-share-{stamp}"));
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dir = fresh_share_dir()?;
 
     let result = prepare_dir(&app, &path, sub_index, &dir).await;
     let warnings = match result {
@@ -305,4 +326,26 @@ fn main() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn share_dirs_are_new_private_and_never_reused() {
+        let a = fresh_share_dir().unwrap();
+        let b = fresh_share_dir().unwrap();
+        assert_ne!(a, b);
+        assert!(a.file_name().unwrap().to_str().unwrap().starts_with("hb-share-"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&a).unwrap().permissions().mode() & 0o777, 0o700);
+        }
+        // the exclusive create that fresh_share_dir relies on refuses an existing path
+        assert_eq!(std::fs::DirBuilder::new().create(&a).unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
+        std::fs::remove_dir(&a).unwrap();
+        std::fs::remove_dir(&b).unwrap();
+    }
 }
