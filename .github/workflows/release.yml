@@ -106,7 +106,13 @@ jobs:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           SECRET_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
-          if [ "$SIGNED" = 1 ]; then export APPLE_SIGNING_IDENTITY="$SECRET_SIGNING_IDENTITY"; else export APPLE_SIGNING_IDENTITY=-; fi
+          if [ "$SIGNED" = 1 ]; then
+            export APPLE_SIGNING_IDENTITY="$SECRET_SIGNING_IDENTITY"
+          else
+            # Tauri treats a set-but-empty APPLE_CERTIFICATE as a certificate to import, so remove them
+            unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_PATH
+            export APPLE_SIGNING_IDENTITY=-
+          fi
           cargo tauri build --bundles app -- --locked
 
       - name: Check the signature
