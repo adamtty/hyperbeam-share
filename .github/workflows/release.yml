@@ -26,10 +26,10 @@ env:
   RUST_VERSION: 1.99.1
   # renovate: datasource=crate depName=tauri-cli
   TAURI_CLI_VERSION: 2.12.3
-  # cloudflared is bundled as Cloudflare ships it: version, archive hash and signing team all pinned.
-  # Bump the version and hash together (the hash is on the release page).
+  # cloudflared is bundled as Cloudflare ships it, verified by its Apple code signature: a Developer ID certificate
+  # from Apple for Cloudflare's team. No hash to pin, so a version bump needs nothing else changed.
+  # renovate: datasource=github-releases depName=cloudflare/cloudflared
   CLOUDFLARED_VERSION: 2026.10.1
-  CLOUDFLARED_SHA256: 647615df99d49cd179ea5e13ef760b9bbfb33630f6ae62f87e33dfadda60adcc
   CLOUDFLARED_TEAM: 68WVV388M8
 
 jobs:
@@ -75,14 +75,15 @@ jobs:
           cp "$RUNNER_TEMP/ffmpeg/ffmpeg" src-tauri/binaries/ffmpeg-aarch64-apple-darwin
           cp "$RUNNER_TEMP/ffmpeg/ffprobe" src-tauri/binaries/ffprobe-aarch64-apple-darwin
 
-      - name: cloudflared (Cloudflare's release, hash and signature checked)
+      - name: cloudflared (Cloudflare's release, Apple signature checked)
         run: |
           cd "$RUNNER_TEMP"
           curl -fsSLO "https://github.com/cloudflare/cloudflared/releases/download/$CLOUDFLARED_VERSION/cloudflared-darwin-arm64.tgz"
-          echo "$CLOUDFLARED_SHA256  cloudflared-darwin-arm64.tgz" | shasum -a 256 -c -
           tar -xzf cloudflared-darwin-arm64.tgz
-          codesign --verify --strict cloudflared
-          codesign -dv cloudflared 2>&1 | grep -qx "TeamIdentifier=$CLOUDFLARED_TEAM"
+          # valid signature, chained to Apple's root, from a Developer ID certificate issued to Cloudflare's team
+          codesign --verify --strict --verbose=2 \
+            -R="anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = \"$CLOUDFLARED_TEAM\"" \
+            cloudflared
           cp cloudflared "$GITHUB_WORKSPACE/src-tauri/binaries/cloudflared-aarch64-apple-darwin"
 
       # Signing happens in a second pass (below), so the Apple secrets are never in the environment
