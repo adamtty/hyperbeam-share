@@ -29,7 +29,7 @@ env:
   # cloudflared is bundled as Cloudflare ships it, verified by its Apple code signature: a Developer ID certificate
   # from Apple for Cloudflare's team. No hash to pin, so a version bump needs nothing else changed.
   # renovate: datasource=github-releases depName=cloudflare/cloudflared
-  CLOUDFLARED_VERSION: 2026.10.1
+  CLOUDFLARED_VERSION: 2026.10.3
   CLOUDFLARED_TEAM: 68WVV388M8
 
 jobs:
