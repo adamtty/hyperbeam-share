@@ -1,6 +1,6 @@
 [package]
 name = "hyperbeam-share"
-version = "0.1.0"
+version = "0.1.1"
 description = "Remux a local video, extract subtitles, serve it locally, tunnel it out, hand you a URL for Hyperbeam."
 edition = "2021"
 
