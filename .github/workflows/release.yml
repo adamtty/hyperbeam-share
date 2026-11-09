@@ -29,7 +29,7 @@ env:
   # cloudflared is bundled as Cloudflare ships it, verified by its Apple code signature: a Developer ID certificate
   # from Apple for Cloudflare's team. No hash to pin, so a version bump needs nothing else changed.
   # renovate: datasource=github-releases depName=cloudflare/cloudflared
-  CLOUDFLARED_VERSION: 2026.10.3
+  CLOUDFLARED_VERSION: 2026.10.7
   CLOUDFLARED_TEAM: 68WVV388M8
 
 jobs:
@@ -43,7 +43,7 @@ jobs:
       contents: read
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: audit
 
@@ -167,7 +167,7 @@ jobs:
       attestations: write # store it
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: block
           allowed-endpoints: >
