@@ -32,11 +32,15 @@ env:
   # renovate: datasource=github-releases depName=cloudflare/cloudflared
   CLOUDFLARED_VERSION: 2026.10.3
   CLOUDFLARED_TEAM: 68WVV388M8
+  # Xcode's linker and SDK are recorded in the app's binary, so a rebuild matches only with the same Xcode. Pinned here
+  # (the runner image's default changes from month to month) and written to BUILDINFO on each release, so anyone
+  # rebuilding it knows which one to use. Bump by hand, to a version the macos-26 image has.
+  XCODE_VERSION: "26.6"
 
 jobs:
   build:
     name: Build app
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 60
     # the Apple signing secrets live in "release", which only v* tags can use; dry runs get none
     environment: ${{ github.event_name == 'push' && 'release' || 'release-dry-run' }}
@@ -51,6 +55,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Xcode ${{ env.XCODE_VERSION }}
+        run: |
+          sudo xcode-select -s "/Applications/Xcode_${XCODE_VERSION}.app"
+          xcodebuild -version
 
       - name: Tag matches the app version
         if: github.event_name == 'push'
@@ -145,6 +154,17 @@ jobs:
           ditto -c -k --keepParent "src-tauri/target/release/bundle/macos/Hyperbeam Share.app" "$zip"
           cp "$RUNNER_TEMP"/ffmpeg/source/* dist/
           cp THIRD_PARTY_NOTICES.md dist/
+          # what a rebuild needs to match
+          {
+            echo "commit: $GITHUB_SHA"
+            echo "xcode: $(xcodebuild -version | tr '\n' ' ' | sed 's/ *$//')"
+            echo "macos-sdk: $(xcrun --show-sdk-version)"
+            echo "rust: $(rustc -V)"
+            echo "tauri-cli: $(cargo tauri -V)"
+            echo "cloudflared: $CLOUDFLARED_VERSION"
+            echo "runner-image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+          } > dist/BUILDINFO
+          cat dist/BUILDINFO
           (cd dist && shasum -a 256 -- * > SHA256SUMS)
           cat dist/SHA256SUMS
           echo "$SIGNED" > dist/.signed
@@ -215,4 +235,4 @@ jobs:
           Bundles ffmpeg/ffprobe built from FFmpeg's signed source (LGPL-2.1-or-later; the exact source tarball is attached) and Cloudflare's own \`cloudflared\` $CLOUDFLARED_VERSION. See \`THIRD_PARTY_NOTICES.md\`.
           EOF
           gh release create "$GITHUB_REF_NAME" --repo "$REPO" --verify-tag --title "Hyperbeam Share ${GITHUB_REF_NAME}" \
-            --notes-file notes.md --generate-notes -- *.zip *.zip.intoto.jsonl SHA256SUMS ffmpeg-*.tar.xz ffmpeg-*.tar.xz.asc THIRD_PARTY_NOTICES.md
+            --notes-file notes.md --generate-notes -- *.zip *.zip.intoto.jsonl SHA256SUMS BUILDINFO ffmpeg-*.tar.xz ffmpeg-*.tar.xz.asc THIRD_PARTY_NOTICES.md
