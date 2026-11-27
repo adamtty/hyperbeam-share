@@ -230,7 +230,7 @@ jobs:
           cat > notes.md <<EOF
           **Download:** \`$zip\` (Apple Silicon, macOS 11+). $opening
 
-          **Verify:** \`shasum -a 256 -c SHA256SUMS\`, and \`gh attestation verify $zip --repo $REPO\` to check it was built by this repository's release workflow.
+          **Verify:** \`shasum -a 256 -c SHA256SUMS\`, and \`gh attestation verify $zip --repo $REPO\` to check it was built by this repository's release workflow. To rebuild it yourself and check every byte matches: \`scripts/verify-release.sh $GITHUB_REF_NAME\` (see the README's *Reproducible builds*).
 
           Bundles ffmpeg/ffprobe built from FFmpeg's signed source (LGPL-2.1-or-later; the exact source tarball is attached) and Cloudflare's own \`cloudflared\` $CLOUDFLARED_VERSION. See \`THIRD_PARTY_NOTICES.md\`.
           EOF
