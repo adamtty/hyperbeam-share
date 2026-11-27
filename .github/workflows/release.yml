@@ -13,6 +13,7 @@ on:
     paths:
       - ".github/workflows/release.yml"
       - "scripts/build-ffmpeg.sh"
+      - "scripts/build-app.sh"
       - "src-tauri/tauri.conf.json"
 
 permissions: {}
@@ -101,17 +102,17 @@ jobs:
             echo "::warning::No Apple signing secrets: the app is ad-hoc signed, so Gatekeeper blocks it until the user clicks Open Anyway."
           fi
 
+      # scripts/build-app.sh remaps the checkout and cargo-home paths, so the binary doesn't depend on where it was built;
+      # a rebuild of a release uses the same script.
       - name: Build (no secrets)
-        working-directory: src-tauri
         env:
           APPLE_SIGNING_IDENTITY: "-"
-        run: cargo tauri build --bundles app -- --locked
+        run: scripts/build-app.sh
 
-      # Everything is compiled already, so cargo has nothing to rebuild and no dependency code runs
-      # again: this pass only re-bundles, signs with the Developer ID and notarises.
+      # Everything is compiled already (same script, same flags), so cargo has nothing to rebuild and no dependency code
+      # runs again: this pass only re-bundles, signs with the Developer ID and notarises.
       - name: Sign and notarise
         if: env.SIGNED == '1'
-        working-directory: src-tauri
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -125,7 +126,7 @@ jobs:
           printf '%s\n' "$APPLE_API_KEY_P8" > "$APPLE_API_KEY_PATH"
           unset APPLE_API_KEY_P8
           trap 'rm -f "$APPLE_API_KEY_PATH"' EXIT
-          cargo tauri build --bundles app -- --locked
+          scripts/build-app.sh
 
       - name: Check the signature
         run: |
