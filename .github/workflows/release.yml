@@ -24,13 +24,13 @@ concurrency:
 
 env:
   # renovate: datasource=github-releases depName=rust-lang/rust
-  RUST_VERSION: 1.99.1
+  RUST_VERSION: 1.100.0
   # renovate: datasource=crate depName=tauri-cli
   TAURI_CLI_VERSION: 2.12.3
   # cloudflared is bundled as Cloudflare ships it, verified by its Apple code signature: a Developer ID certificate
   # from Apple for Cloudflare's team. No hash to pin, so a version bump needs nothing else changed.
   # renovate: datasource=github-releases depName=cloudflare/cloudflared
-  CLOUDFLARED_VERSION: 2026.10.3
+  CLOUDFLARED_VERSION: 2026.11.2
   CLOUDFLARED_TEAM: 68WVV388M8
   # Xcode's linker and SDK are recorded in the app's binary, so a rebuild matches only with the same Xcode. Pinned here
   # (the runner image's default changes from month to month) and written to BUILDINFO on each release, so anyone
@@ -48,7 +48,7 @@ jobs:
       contents: read
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
 
@@ -188,7 +188,7 @@ jobs:
       attestations: write # store it
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: block
           allowed-endpoints: >
