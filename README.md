@@ -77,9 +77,11 @@ suffix, e.g. `ffmpeg-aarch64-apple-darwin`.
 ## Build
 
 ```sh
-cd src-tauri
-cargo tauri build   # → target/release/bundle/macos/Hyperbeam Share.app
+scripts/build-app.sh   # → src-tauri/target/release/bundle/macos/Hyperbeam Share.app
 ```
+
+That's `cargo tauri build --bundles app -- --locked` with the build machine's paths remapped (see
+[Reproducible builds](#reproducible-builds)). Plain `cargo tauri build` in `src-tauri` works too.
 
 ## Releases
 
@@ -94,10 +96,43 @@ release workflow, which:
 4. publishes a GitHub release with the zipped app, `SHA256SUMS`, a build-provenance attestation, the
    FFmpeg source it was built from (for the LGPL), and `THIRD_PARTY_NOTICES.md`.
 
+Each release also attaches `BUILDINFO`: the commit, and the Xcode, macOS SDK, Rust, Tauri CLI,
+cloudflared and runner image it was built with.
+
 Signing secrets live in the repository's `release` environment, which only `v*` tags can use:
 `APPLE_CERTIFICATE` (base64 `.p12` of a Developer ID Application certificate),
 `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, and for notarisation an App Store Connect API
 key: `APPLE_API_ISSUER`, `APPLE_API_KEY` (the key ID) and `APPLE_API_KEY_P8` (the key file's contents).
+
+## Reproducible builds
+
+The provenance attestation proves a release was built by this repository's workflow. A rebuild proves
+what's in it: anyone can build the tagged source themselves and check that every byte matches the
+published app, without trusting GitHub or this repository's workflow.
+
+```sh
+scripts/verify-release.sh v0.2.0
+```
+
+It downloads the release, checks its hashes and provenance, rebuilds ffmpeg from FFmpeg's signed
+source, fetches Cloudflare's `cloudflared`, builds the app with the Rust and Tauri CLI versions the
+release workflow pins, and compares the two bundles file by file. It needs an Apple Silicon Mac with
+the Xcode version named in the release's `BUILDINFO`, because Xcode's linker and SDK are recorded in
+the binary; older versions are at [developer.apple.com/download](https://developer.apple.com/download/all/).
+It takes about 15 minutes.
+
+What makes this work:
+
+- **No build paths in the binary:** `scripts/build-app.sh` remaps the checkout to `/build` and the
+  cargo home to `/cargo`, so the folder you build in and your user name don't matter.
+- **Pinned inputs:** `Cargo.lock`, the Rust toolchain, the Tauri CLI, FFmpeg's source tarball (by
+  hash and signature), cloudflared's version and Cloudflare's signature, and the Xcode version.
+- **Signatures set aside:** a code signature can't be reproduced (a Developer ID signature records a
+  certificate and a time; even an ad-hoc one depends on the `codesign` version), so executables are
+  compared without theirs (`scripts/unsigned-hash.py`) and `_CodeSignature/CodeResources` is skipped.
+  Everything else must match exactly.
+
+Releases up to v0.1.1 predate this (no `BUILDINFO`, no path remapping) and can't be checked this way.
 
 ## Security notes
 
