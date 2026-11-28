@@ -130,7 +130,8 @@ What makes this work:
 - **Signatures set aside:** a code signature can't be reproduced (a Developer ID signature records a
   certificate and a time; even an ad-hoc one depends on the `codesign` version), so executables are
   compared without theirs (`scripts/unsigned-hash.py`) and `_CodeSignature/CodeResources` is skipped.
-  Everything else must match exactly.
+  So is each executable's build UUID, which Apple's linker doesn't always produce the same for the same
+  output. Everything else must match exactly.
 
 Releases up to v0.1.1 predate this (no `BUILDINFO`, no path remapping) and can't be checked this way.
 
