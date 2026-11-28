@@ -6,11 +6,15 @@ correct builds of the same source never have identical signed files. This hashes
 the file up to where the signature starts, with the fields that only record the signature's size set to zero
 (LC_CODE_SIGNATURE's offset and size, and __LINKEDIT's file and memory size). Universal (fat) files are handled per
 architecture. Files that aren't Mach-O are hashed as they are.
+
+The build UUID (LC_UUID) is zeroed too. Apple's linker documents it as a hash of the output's content, but it doesn't
+always come out the same: two CI builds of ffmpeg were identical in every byte of code, data and symbols, and differed
+only in the UUID (and so in the signature, which covers it). Every other byte still has to match.
 """
 import hashlib, struct, sys
 
 MH_MAGIC_64, FAT_MAGIC, FAT_MAGIC_64 = 0xFEEDFACF, 0xCAFEBABE, 0xCAFEBABF
-LC_SEGMENT_64, LC_CODE_SIGNATURE = 0x19, 0x1D
+LC_SEGMENT_64, LC_UUID, LC_CODE_SIGNATURE = 0x19, 0x1B, 0x1D
 
 
 def thin(b: bytes) -> bytes:
@@ -23,6 +27,8 @@ def thin(b: bytes) -> bytes:
         if cmd == LC_CODE_SIGNATURE:
             end = struct.unpack_from("<I", b, off + 8)[0]
             struct.pack_into("<II", out, off + 8, 0, 0)
+        elif cmd == LC_UUID:
+            out[off + 8:off + 24] = bytes(16)
         elif cmd == LC_SEGMENT_64 and b[off + 8:off + 24].rstrip(b"\0") == b"__LINKEDIT":
             struct.pack_into("<Q", out, off + 32, 0)  # vmsize
             struct.pack_into("<Q", out, off + 48, 0)  # filesize
