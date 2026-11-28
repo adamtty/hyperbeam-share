@@ -1,0 +1,154 @@
+name: Reproducible build
+
+# Builds the app twice, on two separate runners, and fails if the two bundles differ (code signatures aside, which
+# can't be reproduced; see the README's "Reproducible builds"). The second build uses a checkout path with a space in
+# it and its own cargo home, so a path that leaks into the binary shows up here before it reaches a release.
+#
+# Runs on pull requests that change how the app is built, weekly (a dependency or runner-image change can break it
+# without any change here), and on demand.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/reproducible.yml"
+      - ".github/workflows/release.yml"
+      - "scripts/build-app.sh"
+      - "scripts/build-ffmpeg.sh"
+      - "scripts/unsigned-hash.py"
+      - "src-tauri/Cargo.toml"
+      - "src-tauri/Cargo.lock"
+      - "src-tauri/build.rs"
+      - "src-tauri/tauri.conf.json"
+  schedule:
+    - cron: "41 5 * * 2"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: reproducible-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: macos-26
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: a
+            dir: hyperbeam-share
+            cargo_home: "" # the default, ~/.cargo
+          - name: b
+            dir: "other place/hs"
+            cargo_home: "cargo b"
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: ${{ matrix.dir }}
+
+      # the versions the release workflow pins, read from it so the two can't drift apart
+      - name: Release versions
+        env:
+          DIR: ${{ matrix.dir }}
+        run: |
+          for v in RUST_VERSION TAURI_CLI_VERSION CLOUDFLARED_VERSION CLOUDFLARED_TEAM XCODE_VERSION; do
+            val=$(sed -n "s/^  $v: \"\{0,1\}\([^\"]*\)\"\{0,1\}$/\1/p" "$DIR/.github/workflows/release.yml" | head -1)
+            [ -n "$val" ] || { echo "::error::$v not found in release.yml"; exit 1; }
+            echo "$v=$val" >> "$GITHUB_ENV"
+            echo "$v=$val"
+          done
+
+      - name: Xcode
+        run: |
+          sudo xcode-select -s "/Applications/Xcode_${XCODE_VERSION}.app"
+          xcodebuild -version
+
+      - name: Rust toolchain and tauri-cli
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+          cargo install tauri-cli --version "$TAURI_CLI_VERSION" --locked
+
+      - name: ffmpeg and ffprobe
+        env:
+          DIR: ${{ matrix.dir }}
+        run: |
+          "$DIR/scripts/build-ffmpeg.sh" "$RUNNER_TEMP/ffmpeg"
+          mkdir -p "$DIR/src-tauri/binaries"
+          cp "$RUNNER_TEMP/ffmpeg/ffmpeg" "$DIR/src-tauri/binaries/ffmpeg-aarch64-apple-darwin"
+          cp "$RUNNER_TEMP/ffmpeg/ffprobe" "$DIR/src-tauri/binaries/ffprobe-aarch64-apple-darwin"
+
+      - name: cloudflared
+        env:
+          DIR: ${{ matrix.dir }}
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "https://github.com/cloudflare/cloudflared/releases/download/$CLOUDFLARED_VERSION/cloudflared-darwin-arm64.tgz"
+          tar -xzf cloudflared-darwin-arm64.tgz
+          codesign --verify --strict --verbose=2 \
+            -R="anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = \"$CLOUDFLARED_TEAM\"" \
+            cloudflared
+          cp cloudflared "$GITHUB_WORKSPACE/$DIR/src-tauri/binaries/cloudflared-aarch64-apple-darwin"
+
+      - name: Build
+        env:
+          DIR: ${{ matrix.dir }}
+          CARGO_HOME_NAME: ${{ matrix.cargo_home }}
+          APPLE_SIGNING_IDENTITY: "-"
+        run: |
+          if [ -n "$CARGO_HOME_NAME" ]; then export CARGO_HOME="$RUNNER_TEMP/$CARGO_HOME_NAME"; fi
+          "$DIR/scripts/build-app.sh"
+          tar -C "$DIR/src-tauri/target/release/bundle/macos" -cf "$RUNNER_TEMP/app.tar" "Hyperbeam Share.app"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: app-${{ matrix.name }}
+          path: ${{ runner.temp }}/app.tar
+          retention-days: 7
+
+  compare:
+    name: Compare
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: app-*
+          path: builds
+
+      - name: Same app, signatures aside
+        run: |
+          for b in a b; do mkdir -p "x/$b" && tar -C "x/$b" -xf "builds/app-$b/app.tar"; done
+          list() { (cd "$1" && find . -type f ! -path './Contents/_CodeSignature/*' | LC_ALL=C sort); }
+          a="x/a/Hyperbeam Share.app"; b="x/b/Hyperbeam Share.app"
+          if ! diff <(list "$a") <(list "$b"); then echo "::error::the two bundles have different files"; exit 1; fi
+          bad=0
+          while IFS= read -r f; do
+            ha=$(python3 -I scripts/unsigned-hash.py "$a/$f" | cut -d' ' -f1)
+            hb=$(python3 -I scripts/unsigned-hash.py "$b/$f" | cut -d' ' -f1)
+            if [ "$ha" = "$hb" ]; then echo "same     $f  $ha"; else echo "::error::$f differs between the two builds"; bad=1; fi
+          done < <(list "$a")
+          exit "$bad"
